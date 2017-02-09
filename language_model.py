@@ -22,7 +22,7 @@ class _BaseNGram(object):
         self._special_token = special_token
 
     def _get_mle_count(self, corpus, n=1):
-        """Compute the Maximum-likelihodd estimate of ngram count 
+        """Compute the Maximum-likelihood estimate of ngram count 
 
         Parameters
         ----------
@@ -41,24 +41,22 @@ class _BaseNGram(object):
             raise TypeError("n must be integer >= 1.")
 
         mle_count = Counter()
-        for tokens in corpus:
-            if not isinstance(tokens, Iterable):
-                raise TypeError("element of corpus must be Iterable: %s")
-            mle_count.update(self._get_ngram_iter(tokens, n=n))
+        for doc in corpus:
+            mle_count.update(self._get_ngram_iter(doc, n=n))
         mle_count = dict(mle_count)
         if len(mle_count) == 0:
             raise ValueError("corpus must be non-empty.")
 
         return mle_count
 
-    def _get_ngram_iter(self, tokens, n=1):
-        """Convert sequence to tokens into ngrams
+    def _get_ngram_iter(self, doc, n=1):
+        """Convert sequence of tokens in a document into ngrams
 
         Example: ["a", "b", "c"] => [("a", "b"), ("b", "c")] for bigram
 
         Parameters
         ----------
-        tokens : Iterable
+        doc : Iterable
             A document represented as sequence of str
         
         n : int, optional, default 1
@@ -69,13 +67,16 @@ class _BaseNGram(object):
         Generator returns one ngram at a time. Each ngram is represented as a
         tuple of str."""
 
+        if not isinstance(doc, Iterable):
+            raise TypeError("element of corpus must be Iterable: %s")
+
         ngram = []
         if self._special_token:
             if n == 1:
                 yield ("<s>",)
             else:
                 ngram = ["<s>"] * (n - 1)
-        for token in tokens:
+        for token in doc:
             if not isinstance(token, basestring) or len(token) == 0:
                 raise TypeError("token must be non-empty str.")
             ngram.append(token)
@@ -94,11 +95,11 @@ class _BaseNGram(object):
         if not isinstance(n0, int) or n0 < 0:
             raise TypeError("out-of-vocabulary size must be an integer >= 0.")
 
-    def _validate_predict_input(self, tokens, normalize, base):
+    def _validate_predict_input(self, doc, normalize, base):
         """Validate input of predict function"""
 
-        if not isinstance(tokens, Iterable):
-            raise TypeError("tokens must be Iterable.")
+        if not isinstance(doc, Iterable):
+            raise TypeError("doc must be Iterable.")
         if not isinstance(normalize, bool):
             raise TypeError("normalize must be bool.")
         if not isinstance(base, float) or base < 0:
@@ -110,6 +111,22 @@ class Unigram(_BaseNGram):
     def fit(self, corpus, n0=0):
         """Fit Unigram model from training corpus
 
+        The effective count `gt_c[r]` of words that appear `r` times will be
+        smoothed using Good-Turing method:
+
+        gt_c[r] = (r + 1) * N[r + 1] / N[r]
+
+        where N[.] is simply the number of unique words that appear `.` times.
+        For example, N[1] = 3, N[2] = 2, N[3] = 1 for the corpus ["a", "b", "c",
+        "d", "d", "e", "e", "f", "f", "f"]
+
+        Specifically, the effective count of words that do not appear in the
+        training corpus (out-of-vocabulary) is computed as follows:
+
+        gt_c[0] = (0 + 1) * N[0 + 1] / N[0] 
+
+        where N[0] is simply `n0` as a parameter.
+
         Parameters
         ----------
         corpus : Iterable
@@ -117,7 +134,7 @@ class Unigram(_BaseNGram):
             Iterable of str)
 
         n0 : int, optional, default 0
-            The number of unique out-of-vocabulary tokens (i.e. N0)"""
+            The number of unique out-of-vocabulary tokens (i.e. N[0])"""
 
         self._validate_fit_input(corpus, n0)
         mle_count = self._get_mle_count(corpus, n=1)
@@ -133,23 +150,30 @@ class Unigram(_BaseNGram):
                 float(n_mle_count[counts[r]])
         gt_count[counts[-1]] = counts[-1]
 
-        gt_prob = {k: (v / corpus_length) for k, v in gt_count.iteritems()}
+        gt_prob = {k: v / corpus_length for k, v in gt_count.iteritems()}
 
-        prob_mass = reduce(lambda x,y: x+y, \
+        # normalize `gt_prob` such that the frequency of all words add up to one
+        prob_mass = reduce(lambda x, y: x + y, \
             map(lambda r: n_mle_count[r] * gt_prob[r], gt_prob.keys()), 0.0)
         gt_prob = {k: v / prob_mass for k, v in gt_prob.iteritems()}
+
+        # make sure probabilities in gt_prob add up to 1.0
+        # prob_mass = reduce(lambda x, y: x + y, \
+        #    map(lambda r: n_mle_count[r] * gt_prob[r], gt_prob.keys()), 0.0)
+        # assert prob_mass == 1.0
 
         self.gt_prob_ = gt_prob
         self.mle_count_ = mle_count
         self.n_mle_count_ = n_mle_count
 
-    def predict(self, tokens, normalize=True, base=e):
-        """Predict the log-transformed probability of a list of tokens
+    def predict(self, doc, normalize=True, base=e):
+        """Predict the log-transformed probability of a list of tokens from a
+        document
         
         Parameters
         ----------
-        tokens : Iterable
-            Sequence of tokens to be evaluated
+        doc : Iterable
+            Sequence of tokens from a document
 
         normalize : bool, optional, default True
             If True, divide the sum of log-probabilities by the length of token
@@ -162,11 +186,11 @@ class Unigram(_BaseNGram):
         score : float
             Probability score of input sequence of tokens"""
        
-        self._validate_predict_input(tokens, normalize, base)
-        unigram_list = [unigram for unigram in self._get_ngram_iter(tokens)]
+        self._validate_predict_input(doc, normalize, base)
+        unigram_list = [unigram for unigram in self._get_ngram_iter(doc)]
 
         if len(unigram_list) == 0:
-            raise ValueError("tokens must be non-empty.")
+            raise ValueError("doc must be non-empty.")
         
         scores = [self.logprob(u, base) for u in unigram_list]
         score = reduce(lambda x,y: x+y, scores, 0.0)
@@ -226,13 +250,22 @@ class Bigram(_BaseNGram):
         self.mle_count_ = mle_count
         self.unigram_ = unigram
 
-    def predict(self, tokens, alpha=0.4, normalize=True, base=e):
+    def predict(self, doc, alpha=0.4, normalize=True, base=e):
         """Predict the log-transformed probability of a list of tokens
-        
+        from a document
+
+        This implementation is based on Stupid back-off, introduced in
+
+        Large language models in machine translation, T Brants et al. 2007
+
+        http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.324.3653
+
+        Note that is this approach the frequency of bigrams are not normalized
+
         Parameters
         ----------
-        tokens : Iterable
-            Sequence of tokens to be evaluated
+        doc : Iterable
+            Sequence of tokens from a document
 
         alpha : float
             Parameter of the Stupid backoff method
@@ -248,13 +281,15 @@ class Bigram(_BaseNGram):
         score : float
             Probability score of input sequence of tokens"""
 
-        self._validate_predict_input(tokens, normalize, base)
+        self._validate_predict_input(doc, normalize, base)
         if not isinstance(alpha, float) or alpha < 0. or alpha > 1.:
             raise TypeError("alpha must be float >= 0 and <= 1.")
 
-        bigram_list = [bigram for bigram in self._get_ngram_iter(tokens, 2)]
+        tmp = list(doc)
+        bigram_list = [bigram for bigram in self._get_ngram_iter(doc, 2)]
         if len(bigram_list) == 0:
-            raise ValueError("tokens must be non-empty.")
+            print tmp
+            raise ValueError("doc must be non-empty.")
 
         bigram_mle_count = self.mle_count_
         unigram_mle_count = self.unigram_.mle_count_
