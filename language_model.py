@@ -165,7 +165,8 @@ class Unigram(_BaseNGram):
         self.gt_prob_ = gt_prob
         self.mle_count_ = mle_count
         self.n_mle_count_ = n_mle_count
-
+        return self
+    
     def predict(self, doc, normalize=True, base=e):
         """Predict the log-transformed probability of a list of tokens from a
         document
@@ -249,6 +250,7 @@ class Bigram(_BaseNGram):
 
         self.mle_count_ = mle_count
         self.unigram_ = unigram
+        return self
 
     def predict(self, doc, alpha=0.4, normalize=True, base=e):
         """Predict the log-transformed probability of a list of tokens
